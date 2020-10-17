@@ -17,9 +17,33 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"reflect"
 	"strconv"
+	"strings"
+
+	// tl "github.com/tricksterproxy/trickster/pkg/logging"
 )
+
+
+type envToConfig struct {
+	key		string
+	value	string
+}
+// var tomlTagsToConfigMap map[string]interface{}
+
+// func init() {
+// 	tomlTagsToConfigMap = make(map[string]interface{})
+// 	c := Config{}
+// 	refType := reflect.TypeOf(c)
+// 	for i:=0; i < refType.NumField(); i++ {
+// 		// refType.Field(i).Tag.Get("toml")
+// 		if tag, ok := refType.Field(i).Tag.Lookup("toml"); ok {
+// 			tomlTagsToConfigMap[tag] = reflect.New(refType.Field(i).Type.Elem())
+// 		}
+// 	}
+// }
 
 const (
 	// Environment variables
@@ -58,5 +82,66 @@ func (c *Config) loadEnvVars() {
 	if x := os.Getenv(evLogLevel); x != "" {
 		c.Logging.LogLevel = x
 	}
+	c.loadEnvVarsNew()
 
+}
+
+func (c *Config)loadEnvVarsNew() {
+	configMap := make(map[string]map[string]string)
+	for _, e := range os.Environ() {
+		option := strings.SplitN(e, "=", 2) // split: TRX_main_instance_id="1234" into TRX_main_instance_id and "1234"
+		n := strings.SplitN(option[0], "_", 3) // split: TRX_main_instance_id into TRX, main & instance_id
+		if n[0] == "TRX" {
+      		if _, ok := configMap[n[1]]; !ok {
+        		configMap[n[1]] = make(map[string]string)
+      		}
+      		configMap[n[1]][n[2]] = option[1]
+		}
+	}
+	//TODO: Not cool! try with pointers instead of this
+	cfg := *c
+	fmt.Printf("\n Config BEFORE:  \n %+v \n", cfg.Backends)
+	refValC := reflect.ValueOf(cfg)
+	for i:=0; i < reflect.TypeOf(cfg).NumField(); i++ {
+		if tagName, ok := reflect.TypeOf(cfg).Field(i).Tag.Lookup("toml"); ok {
+		  if _, ok:=configMap[tagName]; ok {
+			//   fmt.Println(tagName)
+			if refValC.Field(i).Kind() == reflect.Map {
+				iter := refValC.Field(i).MapRange()
+				for iter.Next() {
+				  // x := reflect.TypeOf(c).Field(i).Type
+				  x := refValC.Field(i).MapIndex(iter.Key()).Type()
+				  update(configMap[tagName], x, refValC.Field(i).MapIndex(iter.Key()).Elem())
+				}
+				continue
+			}
+			update(configMap[tagName], reflect.TypeOf(cfg).Field(i).Type, refValC.Field(i).Elem())
+		  }
+		}
+	}
+	fmt.Printf("\n Config AFTER:  \n %+v \n", cfg.Backends)
+	c = &cfg
+	fmt.Println("Updated config")
+}
+
+func update(nameMap map[string]string, f reflect.Type, v reflect.Value) {
+	for i:=0; i < f.Elem().NumField(); i++ {
+	  if tag, ok := f.Elem().Field(i).Tag.Lookup("toml"); ok {
+		if newValue, ok := nameMap[tag]; ok {
+		  // updateViaReflect(f.Elem().Field(i).Type, v.Field(i), newValue)
+		  switch f.Elem().Field(i).Type.Kind() {
+			case reflect.Int, reflect.Int64:
+	  			n, _ := strconv.ParseInt(newValue, 0, 64)
+	  			v.Field(i).SetInt(n)
+			case reflect.String:
+				v.Field(i).SetString(newValue)
+			case reflect.Bool:
+				n, _ := strconv.ParseBool(newValue)
+				v.Field(i).SetBool(n)
+			default:
+	  			fmt.Println("Unhandled type")
+		  }
+		}
+	  }
+	}
 }
